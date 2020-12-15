@@ -1,18 +1,46 @@
 from requests_html import HTMLSession
 import re
+from unidecode import unidecode as ud
+from datetime import datetime as dt
 
 # Helper script to scrape in specific table data from rr pages
 
 session = HTMLSession()
 regex = "(,)*\s*(&|and)\s+"
 
-def generate_cypher_data(file, info_dict):
+def generate_cypher_data(file, info_dict, cur_year):
+
+    cypher_create_wrestlers = []
+    cypher_create_participants = []
+    cypher_create_elims = []
 
     for inf in info_dict:
-        alias = inf['wrestler'].replace(" ", "")
+        #print(inf)
+        time_val = dt.strptime(inf['time_in'], "%M:%S") #<-- use regex to clean the string and define tokens
+        print(time_val)
+        normalized = ud(inf['wrestler'])
+        alias = normalized.replace(" ", "")
         alias = re.sub("\W*", "", alias)
-        file.write("MERGE (" + alias + ":Wrestler {name:'" + inf['wrestler'] + "'})\n")
+        cypher_create_wrestlers.append("MERGE (" + alias + ":Wrestler {name:'" + normalized + "'})\n")
+        if 'brand' in inf:
+            cypher_create_participants.append("CREATE (" + alias + ")-[:WAS_IN{draw:" + inf['draw'] + ", brand:" + inf['brand'] + "}]->(RR" + cur_year + ")\n")
+        else:
+            cypher_create_participants.append("CREATE (" + alias + ")-[:WAS_IN{draw:" + inf['draw'] + "}]->(RR" + cur_year + ")\n")
+        #print("time in: " + inf['time_in'])
+        if type(inf['eliminators']) is list:
+            for elim in inf['eliminators']:
+                cypher_create_elims.append("CREATE (" + alias + ")-[:ELIMINATED_BY {order:" + inf['order'] + ", time:\"" + inf['time_in'] + "\"}]->(" + elim + ")\n")
+        else:
+            cypher_create_elims.append("CREATE (" + alias + ")-[:ELIMINATED_BY {order:" + inf['order'] + ", time:\"" + inf['time_in'] + "\"}]->(" + inf['eliminators'] + ")\n")
 
+    for ccw in cypher_create_wrestlers:
+        file.write(ccw)
+    file.write("//Participations\n")
+    for ccp in cypher_create_participants:
+        file.write(ccp)
+    file.write("//Eliminations\n")
+    for cce in cypher_create_elims:
+        file.write(cce)
     file.close()
 
 def produce_data(e_title, table_feed, header_count):
@@ -21,13 +49,11 @@ def produce_data(e_title, table_feed, header_count):
     # then we generate the participants in the event
     # then, we create the eliminations
     # finally, we add in the winner
-    #print(e_title)#
     #regex to strip year out
     year_regex = '[^(](\d+)[^)]'
     current_year_search = re.search(year_regex, e_title)
-    #print(current_year.group(0))
     current_year = current_year_search.group(0)
-    cypher_doc = open('cypher_setup_data/cypher_data_' + e_title + ".txt", 'w')
+    cypher_doc = open('cypher_setup_data/cypher_data_' + e_title + ".txt", 'w', encoding="utf-8")
     cypher_doc.write("//Event\n")
     cypher_doc.write("CREATE (RR" + current_year + ":Event { name:'" + e_title + "', year:" + current_year + "})\n")
     cypher_doc.write("//Wrestlers\n")
@@ -37,11 +63,6 @@ def produce_data(e_title, table_feed, header_count):
     six_headers = "Draw | Entrant | Order | Eliminated By | Time | Eliminations\n"
     seven_headers = "Draw | Entrant | Brand | Order | Eliminated By | Time | Eliminations\n"
     max_col_count = header_count
-    current_wrestler = ""
-    draw = ""
-    order = ""
-    eliminators = ""
-    time_in = ""
 
     if header_count > 6:
         print(seven_headers)
@@ -69,8 +90,10 @@ def produce_data(e_title, table_feed, header_count):
         if count == 3 and header_count == 7:
             current_dict['order'] = td.text
 
-        if count == header_count-2:
-            current_dict["time_in"] = td.text
+        # if count == 5 and header_count == 7:
+        #     current_dict["time_in"] = td.text
+        # elif count == 4 and header_count == 6:
+        #     current_dict["time_in"] = td.text
 
         if count == (header_count - 3):
             if td.attrs.get('rowspan') is not None:
@@ -87,13 +110,20 @@ def produce_data(e_title, table_feed, header_count):
                     #print(elim_split)
                     current_dict['eliminators'] = elim_split
 
-        if (count == header_count - 3) and (td.text.isnumeric() is True or ":" in td.text):
+        if (count == header_count - 3) and (":" in td.text):
             max_col_count = header_count - 1
+            #print("time_in weird")
             entry_line += (multi_elim + " | " + td.text + " | ")
             current_dict['eliminators'] = multi_elim
-            #info_dict['time_in'] = td.text
+            #print(current_dict['eliminators'])
+            current_dict['time_in'] = td.text
+            #print(current_dict['time_in'])
+        elif (count == header_count - 2) and (":" in td.text or 'N/A' == td.text):
+            current_dict["time_in"] = td.text
+            entry_line += (td.text + " | ")
         else:
             entry_line += (td.text + " | ")
+            # current_dict['time_in'] = td.text
             #info_dict['time_in'] = td.text
 
         count += 1
@@ -107,33 +137,36 @@ def produce_data(e_title, table_feed, header_count):
             info_dict.append(current_dict)
             current_dict = {}
 
-    generate_cypher_data(cypher_doc, info_dict)
+    generate_cypher_data(cypher_doc, info_dict, current_year)
 
 
-# TODO begin generating cypher queries and dropping them into an aptly named file
-# TODO once table_data is done reading, grab data for the next link and keep the ball rolling
+#TODO replace elimator's name with elim alias in cypher elim queries
+#TODO convert time to seconds <-- this should be dynamically pulled out and converted for ease of time calculations at the DB level
 host_site = 'https://en.wikipedia.org'
-current_page = '/wiki/Royal_Rumble_(1990)'
-rs = session.get(host_site + current_page)
-#rs = session.get("https://en.wikipedia.org/wiki/Royal_Rumble_(1988)")
-# https://en.wikipedia.org/wiki/WWE_Greatest_Royal_Rumble -- works!
-# https://en.wikipedia.org/wiki/Royal_Rumble_(2018)
-#print(rs)
-title = rs.html.find("#firstHeading")
-#print(title[0].text)
-sel = "table.wikitable.sortable"
-#print(rs)
+current_page = '/wiki/Royal_Rumble_(2004)'
 
-table_dataset = rs.html.find(sel)
-#print(table_dataset[0])
+has_next = True
+while has_next:
+    rs = session.get(host_site + current_page)
+    next_sel = "table.infobox"
+    link = rs.html.find(next_sel)
+    href_links = link[0].find('a')
 
-for table in table_dataset:
-    if len(table.find('th')) >= 6:
-        #print(title[0].text)
-        produce_data(title[0].text, table, len(table.find('th')))
+    next_sel = "table.infobox"
+    link = rs.html.find(next_sel)
+    href_links = link[0].find('a')
+    for href in href_links:
+        if re.match('[/]+wiki[/]+Royal_Rumble_[(]+(\d+)[)]+', href.attrs.get('href')):
+            has_next = True
+            current_page = href.attrs.get('href')
+        else:
+            has_next = False
 
-# print(rs.html.find(sel))
-# print(rs.html.absolute_links)
-# print(tab)
 
-# print(rs.text)
+    title = rs.html.find("#firstHeading")
+    sel = "table.wikitable.sortable"
+    table_dataset = rs.html.find(sel)
+
+    for table in table_dataset:
+        if len(table.find('th')) >= 6:
+            produce_data(title[0].text, table, len(table.find('th')))
