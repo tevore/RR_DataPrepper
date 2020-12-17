@@ -8,6 +8,24 @@ from datetime import datetime as dt
 session = HTMLSession()
 regex = "(,)*\s*(&|and)\s+"
 
+def clean_time_string(time_string):
+    time_regex = "[0-9]{0,2}:[0-9]{0,2}:[0-9]{0,2}|[0-9]{0,2}:[0-9]{0,2}"
+    match = re.match(time_regex, time_string)
+    #print(match)
+    if match is not None:
+        matched_time_str = match.group(0)
+        time_convert_format = "%M:%S"
+        if matched_time_str is None:
+            print("WAS NA")
+            return 0
+        else:
+            match_split = matched_time_str.split(":")
+            #print(match_split)
+            if len(match_split) > 2:
+                time_convert_format = "%H:%M:%S"
+            return dt.strptime(matched_time_str, time_convert_format) #<-- TODO use regex to clean the string and define tokens
+    #time_string
+
 def generate_cypher_data(file, info_dict, cur_year):
 
     cypher_create_wrestlers = []
@@ -16,8 +34,12 @@ def generate_cypher_data(file, info_dict, cur_year):
 
     for inf in info_dict:
         #print(inf)
-        time_val = dt.strptime(inf['time_in'], "%M:%S") #<-- use regex to clean the string and define tokens
-        print(time_val)
+
+        time_val = clean_time_string(inf['time_in'])
+        #time_val.second
+        time_val_2 = time_val - dt(1900, 1, 1)
+        #print(time_val_2.total_seconds())
+        #print(time_val)
         normalized = ud(inf['wrestler'])
         alias = normalized.replace(" ", "")
         alias = re.sub("\W*", "", alias)
@@ -29,9 +51,9 @@ def generate_cypher_data(file, info_dict, cur_year):
         #print("time in: " + inf['time_in'])
         if type(inf['eliminators']) is list:
             for elim in inf['eliminators']:
-                cypher_create_elims.append("CREATE (" + alias + ")-[:ELIMINATED_BY {order:" + inf['order'] + ", time:\"" + inf['time_in'] + "\"}]->(" + elim + ")\n")
+                cypher_create_elims.append("CREATE (" + alias + ")-[:ELIMINATED_BY {order:" + inf['order'] + ", time:\"" + str(time_val_2.total_seconds()) + "\"}]->(" + elim + ")\n")
         else:
-            cypher_create_elims.append("CREATE (" + alias + ")-[:ELIMINATED_BY {order:" + inf['order'] + ", time:\"" + inf['time_in'] + "\"}]->(" + inf['eliminators'] + ")\n")
+            cypher_create_elims.append("CREATE (" + alias + ")-[:ELIMINATED_BY {order:" + inf['order'] + ", time:\"" + str(time_val_2.total_seconds()) + "\"}]->(" + inf['eliminators'] + ")\n")
 
     for ccw in cypher_create_wrestlers:
         file.write(ccw)
@@ -143,7 +165,7 @@ def produce_data(e_title, table_feed, header_count):
 #TODO replace elimator's name with elim alias in cypher elim queries
 #TODO convert time to seconds <-- this should be dynamically pulled out and converted for ease of time calculations at the DB level
 host_site = 'https://en.wikipedia.org'
-current_page = '/wiki/Royal_Rumble_(2004)'
+current_page = '/wiki/Royal_Rumble_(1988)'
 
 has_next = True
 while has_next:
